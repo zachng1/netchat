@@ -13,7 +13,10 @@
 
 int main(int argc, char * argv[]) {
 
-    //must check that argvs are valid
+    if (argc != 3) {
+        fprintf(stderr, "Usage: client ipaddress displayname");
+        return 1;
+    }
 
     int sock;
     struct sockaddr_in serverAddr;
@@ -25,6 +28,7 @@ int main(int argc, char * argv[]) {
     serverAddr.sin_port = htons(8081); //should change hardcoded port
     
     if ((inet_pton(AF_INET, argv[1], &serverAddr.sin_addr) <= 0)) {
+        fprintf(stderr, "invalid ip address\n");
         return 1;
     } 
 
@@ -45,7 +49,7 @@ int main(int argc, char * argv[]) {
     pollfds[1].events = POLLIN;
 
     while (true) {
-        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE) < 0) {
+        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE, argv[2]) < 0) {
             break;
         }
     }
