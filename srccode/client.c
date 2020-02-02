@@ -22,7 +22,7 @@ int main(int argc, char * argv[]) {
     //set up server address
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8080); //should change hardcoded port
+    serverAddr.sin_port = htons(8081); //should change hardcoded port
     
     if ((inet_pton(AF_INET, argv[1], &serverAddr.sin_addr) <= 0)) {
         return 1;
