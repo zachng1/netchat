@@ -18,7 +18,13 @@ int recv_fd_pipe(int pipe);
 
 int MAXCLIENTS = 10;
 
-int main(void) {
+int main(int argc, char * argv[]) {
+    if (argc != 2) {
+        printf("Usage: server port");
+        return 1;
+    }
+    
+    int port;
     char buffer[BUFFERSIZE];
     int lsnSock;
     int ioSock;
@@ -28,10 +34,22 @@ int main(void) {
     struct sockaddr_in clientAddr;
     size_t clientLen = sizeof(clientAddr);
 
+    
+    errno = 0;
+    port = (int) strtol(argv[1], NULL, 0);
+    if (errno != 0) {
+        fprintf(stderr, "Invalid port number\n");
+        return 1;
+    }
+    if (port < 0 || port > 65536) {
+        fprintf(stderr, "Invalid port number\n");
+        return 1;
+    }
+
     //setting up server address and client addresses.
     memset(&lsnAddr, 0, sizeof(lsnAddr));
     lsnAddr.sin_family = AF_INET;
-    lsnAddr.sin_port = htons(8081); //should change hardcoded port
+    lsnAddr.sin_port = htons(port);
     lsnAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     memset(&clientAddr, 0, sizeof(clientAddr));
 
@@ -73,7 +91,7 @@ int main(void) {
                 if (send_fd_pipe(pipefd[0], ioSock) < 0) {
                     return -1;
                 }
-                printf("added %s (fd: %d) to room\n", inet_ntoa(clientAddr.sin_addr), ioSock);
+                printf("added %s to room\n", inet_ntoa(clientAddr.sin_addr));
                 close(ioSock);
                 nclients++;
             }
@@ -105,30 +123,36 @@ int main(void) {
                 // double check we don't have MAXCLIENTS, even though parent should confirm before sending
                 if (nfds != MAXCLIENTS) {
                     if ((recvfd = recv_fd_pipe(pipefd[1])) < 0) {
-                        printf("couldn't receive %d\n", recvfd);
+                        fprintf(stderr, "couldn't receive %d\n", recvfd);
                         return -1;
                     }
                     pollfds[nfds].fd = recvfd;
                     pollfds[nfds].events = POLLIN;
                     pollfds[nfds].revents = 0;
                     nfds++;
-                    printf("received new client on fd %d\n", recvfd);
                 }
             }
 
             for (int i = 1; i < nfds; i++) {
                 if (pollfds[i].revents & POLLIN) {
-                    receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE);
-                    //want to look in to how to do this with a broadcast address -- not sure if that is only for local networks however
+                    if (receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE) < 0) {
+                        //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
+                        pollfds[i].events = 0;
+                    }
                     for (int j = 1; j < nfds; j++) {
-                        sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE);
+                        if (j != i) {
+                            if (sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE) < 0) {
+                                //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
+                                pollfds[j].events = 0;
+                            }
+                        }
                     }
                     //reset revents before next call
                     pollfds[i].revents = 0;
                 }
             }
             //add code to deal with clients dropping
-            //add code to identify clients by name --- could send via pipe as a header
+            //add code to identify clients by name --- could send via pipe as a header?
         }
     }
 }
@@ -149,6 +173,7 @@ int send_fd_pipe(int pipe, int sendfd) {
 
     msgh.msg_name = NULL;
     msgh.msg_namelen = 0;
+
     //need to send some 'real' data in the message in order to transmit the control message header which includes the fd
     msgh.msg_iov = &iov;
     msgh.msg_iovlen = 1;
@@ -163,8 +188,10 @@ int send_fd_pipe(int pipe, int sendfd) {
     cmsgptr->cmsg_len = CMSG_LEN(sizeof(int));
     cmsgptr->cmsg_level = SOL_SOCKET;
     cmsgptr->cmsg_type = SCM_RIGHTS;
+
     // cast the pointer that cmsg_data points to to an int, then dereference it
     * ((int *) CMSG_DATA(cmsgptr)) = sendfd;
+    
     // having constructed the msgheader and the control msghdr ancillary data, we send it down the pipe to child process.
     if ((sent = sendmsg(pipe, &msgh, 0)) < 0) {
         return -1;
@@ -183,7 +210,6 @@ int recv_fd_pipe(int pipe) {
         char container[CMSG_SPACE(sizeof(int))];
         struct cmsghdr fill;
     } cMsg;
-
     struct cmsghdr * cmsgptr;
 
     //set up message to recieve data from parent
