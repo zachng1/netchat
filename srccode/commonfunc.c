@@ -52,7 +52,11 @@ int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, siz
         bufferpointer += namelen;
 
         fgets(bufferpointer, ((int) bufferlen) - namelen, stdin); 
-        if (sendxbytes(socketid, buffer, bufferlen) < 0) {
+        if (strcmp(bufferpointer, "EXIT\n") == 0) {
+            printf("EXIT received, shutdown\n");
+            return -1;
+        }
+        else if (sendxbytes(socketid, buffer, bufferlen) < 0) {
             return -1;
         }
         memset(buffer, 0, bufferlen); //clean up buffer for next send / receipt

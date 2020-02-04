@@ -53,7 +53,7 @@ int main(int argc, char * argv[]) {
     if (connect(sock, (struct sockaddr *) &serverAddr, sizeof(serverAddr)) < 0) {
         return 1;
     }
-    printf("Connected!\n");
+    printf("Connected! Send EXIT to close.\n");
 
     //create pollfd for stdin and ioSock
     struct pollfd pollfds[2];
@@ -67,6 +67,7 @@ int main(int argc, char * argv[]) {
             break;
         }
     }
+    shutdown(sock, SHUT_RDWR);
     close(sock);
     return 0;
 

@@ -149,6 +149,7 @@ int main(int argc, char * argv[]) {
                     }
                     //reset revents before next call
                     pollfds[i].revents = 0;
+                    memset(buffer, 0, BUFFERSIZE);
                 }
             }
             //add code to deal with clients dropping
