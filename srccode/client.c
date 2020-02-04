@@ -42,7 +42,6 @@ int main(int argc, char * argv[]) {
     serverAddr.sin_port = htons(port); //should change hardcoded port
     
     if ((inet_pton(AF_INET, argv[1], &serverAddr.sin_addr) <= 0)) {
-        fprintf(stderr, "invalid ip address\n");
         return 1;
     } 
 
