@@ -64,7 +64,7 @@ int main(int argc, char * argv[]) {
 
     if (listen(lsnSock, 5) < 0) {
         fprintf(stderr, "couldn't listen\n");
-        return 1;
+        return -1;
     }
     printf("Listening, ctrl+c to close\n");
 
@@ -88,7 +88,9 @@ int main(int argc, char * argv[]) {
                 continue;
             }
             if (nclients < MAXCLIENTS) {
+                errno = 0;
                 if (send_fd_pipe(pipefd[0], ioSock) < 0) {
+                    fprintf(stderr, "Couldn't send to child %d\n", errno);
                     return -1;
                 }
                 printf("added %s to room\n", inet_ntoa(clientAddr.sin_addr));
@@ -115,7 +117,9 @@ int main(int argc, char * argv[]) {
         pollfds[0].fd = pipefd[1];
         pollfds[0].events = POLLIN;
         while (true) {
+            errno = 0;
             if (poll(pollfds, nfds, -1) < 0) {
+                fprintf(stderr, "poll failed %d\n", errno);
                 return -1;
             }
             //if pipe is readable, this means new client - add new client to list of sockets to poll
@@ -130,20 +134,28 @@ int main(int argc, char * argv[]) {
                     pollfds[nfds].events = POLLIN;
                     pollfds[nfds].revents = 0;
                     nfds++;
+                    printf("Number of clients now %d\n", nfds);
                 }
             }
 
             for (int i = 1; i < nfds; i++) {
                 if (pollfds[i].revents & POLLIN) {
+                    printf("Signal recieved on %d\n", pollfds[i].fd);
                     if (receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE) < 0) {
                         //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
                         pollfds[i].events = 0;
+                        shutdown(pollfds[i].fd, SHUT_RDWR);
+                        close(pollfds[i].fd);
+                        printf("Closed fd %d\n", pollfds[i].fd);
                     }
                     for (int j = 1; j < nfds; j++) {
                         if (j != i) {
                             if (sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE) < 0) {
                                 //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
                                 pollfds[j].events = 0;
+                                shutdown(pollfds[i].fd, SHUT_RDWR);
+                                close(pollfds[i].fd);
+                                printf("Closed fd %d\n", pollfds[i].fd);
                             }
                         }
                     }

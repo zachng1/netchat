@@ -9,7 +9,7 @@
 
 const size_t BUFFERSIZE = 1024;
 
-bool receivexbytes(int socketid, char * buff, size_t bufflen) {
+int receivexbytes(int socketid, char * buff, size_t bufflen) {
     size_t total = 0;
     size_t received;
     while (total < bufflen) {
@@ -19,18 +19,20 @@ bool receivexbytes(int socketid, char * buff, size_t bufflen) {
         total += received;
         buff += received;
     }
+    return total;
 }
 
-bool sendxbytes(int socketid, char * buff, size_t bufflen) {
+int sendxbytes(int socketid, char * buff, size_t bufflen) {
     size_t total = 0;
     size_t sent;
     while (total < bufflen) {
-            if (sent = send(socketid, buff, bufflen, 0) < 0) {
-                return -1;
-            }
-            if (sent == 0) break;
-            total += sent;
+        if (sent = send(socketid, buff, bufflen, 0) < 0) {
+            return -1;
         }
+        if (sent == 0) break;
+        total += sent;
+    }
+    return total;
 }
 
 int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, size_t bufferlen, const char * name) {
