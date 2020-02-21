@@ -15,15 +15,17 @@
 
 int send_fd_pipe(int pipe, int sendfd);
 int recv_fd_pipe(int pipe);
+int addfdtopoll(int pipe, struct pollfd *fds, int nfds);
+int cmpfunc(const void * p1, const void * p2);
 
-int MAXCLIENTS = 10;
-
-int main(int argc, char * argv[]) {
-    if (argc != 2) {
+int main(int argc, char *argv[])
+{
+    if (argc != 2)
+    {
         printf("Usage: server port");
         return 1;
     }
-    
+
     int port;
     char buffer[BUFFERSIZE];
     int lsnSock;
@@ -34,14 +36,15 @@ int main(int argc, char * argv[]) {
     struct sockaddr_in clientAddr;
     size_t clientLen = sizeof(clientAddr);
 
-    
     errno = 0;
-    port = (int) strtol(argv[1], NULL, 0);
-    if (errno != 0) {
+    port = (int)strtol(argv[1], NULL, 0);
+    if (errno != 0)
+    {
         fprintf(stderr, "Invalid port number\n");
         return 1;
     }
-    if (port < 0 || port > 65536) {
+    if (port < 0 || port > 65536)
+    {
         fprintf(stderr, "Invalid port number\n");
         return 1;
     }
@@ -53,109 +56,202 @@ int main(int argc, char * argv[]) {
     lsnAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     memset(&clientAddr, 0, sizeof(clientAddr));
 
-    if ((lsnSock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if ((lsnSock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
         fprintf(stderr, "socket creation error\n");
         return 1;
     }
-    if (bind(lsnSock, (struct sockaddr *) &lsnAddr, sizeof(lsnAddr)) < 0) {
+    if (bind(lsnSock, (struct sockaddr *)&lsnAddr, sizeof(lsnAddr)) < 0)
+    {
         fprintf(stderr, "couldn't bind %d\n", errno);
         return 1;
     }
 
-    if (listen(lsnSock, 5) < 0) {
+    if (listen(lsnSock, 5) < 0)
+    {
         fprintf(stderr, "couldn't listen\n");
         return -1;
     }
     printf("Listening, ctrl+c to close\n");
 
-    
     // create separate processes to handle sending and receiving messages
     // while parent can simply listen for new connections to add to chat room.
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd) < 0) {
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pipefd) < 0)
+    {
         printf("couldn't create socket");
         return -1;
     }
-    pid = fork(); 
-    
+    pid = fork();
+
     //parent
-    if (pid != 0) {
+    if (pid != 0)
+    {
         //close child's side of unix socket
         close(pipefd[1]);
         int nclients = 0;
-        while(true) {
-            if ((ioSock = accept(lsnSock, (struct sockaddr *) &clientAddr, (socklen_t *) &clientLen)) < 0) {
+        while (true)
+        {
+            if ((ioSock = accept(lsnSock, (struct sockaddr *)&clientAddr, (socklen_t *)&clientLen)) < 0)
+            {
                 fprintf(stderr, "couldn't accept incoming client\n");
                 continue;
             }
-            if (nclients < MAXCLIENTS) {
-                errno = 0;
-                if (send_fd_pipe(pipefd[0], ioSock) < 0) {
-                    fprintf(stderr, "Couldn't send to child %d\n", errno);
-                    return -1;
-                }
-                printf("added %s to room\n", inet_ntoa(clientAddr.sin_addr));
-                close(ioSock);
-                nclients++;
+            errno = 0;
+            if (send_fd_pipe(pipefd[0], ioSock) < 0)
+            {
+                fprintf(stderr, "Couldn't send to child %d\n", errno);
+                return -1;
             }
-            else {
-                printf("Room is full\n");
-            }
+            printf("added %s to room\n", inet_ntoa(clientAddr.sin_addr));
+            close(ioSock);
+            nclients++;
         }
     }
 
     //child -- handles receiving and broadcasting messages.
-    else {
+    else
+    {
         //close parent's side of unix socket
         close(pipefd[0]);
 
         //initialise as 1 because pollfds[0] will be pipe
+        //so technically nfds will always be one more than actual nfds 
+        //-- this is okay because we use it to insert the next one
         int nfds = 1;
+        int pollfd_struct_size = 8;
         int recvfd;
         //pollfd will read pipe and client fds
-        struct pollfd pollfds[MAXCLIENTS + 1];
+        struct pollfd * pollfds = malloc(sizeof(struct pollfd) * pollfd_struct_size);
 
         pollfds[0].fd = pipefd[1];
         pollfds[0].events = POLLIN;
-        while (true) {
+        while (true)
+        {
             errno = 0;
-            if (poll(pollfds, nfds, -1) < 0) {
+            if (poll(pollfds, nfds, -1) < 0)
+            {
                 fprintf(stderr, "poll failed %d\n", errno);
                 return -1;
             }
             //if pipe is readable, this means new client - add new client to list of sockets to poll
-            if (pollfds[0].revents & POLLIN) {
-                // double check we don't have MAXCLIENTS, even though parent should confirm before sending
-                if (nfds != MAXCLIENTS) {
-                    if ((recvfd = recv_fd_pipe(pipefd[1])) < 0) {
-                        fprintf(stderr, "couldn't receive %d\n", recvfd);
-                        return -1;
-                    }
-                    pollfds[nfds].fd = recvfd;
-                    pollfds[nfds].events = POLLIN;
-                    pollfds[nfds].revents = 0;
+            if (pollfds[0].revents & POLLIN)
+            {
+                //case that our filedes struct array is not full -- simple, just add new one to end and increment
+                //total number of filedes
+                if (nfds < pollfd_struct_size)
+                {
+                    addfdtopoll(pipefd[1], pollfds, nfds);
                     nfds++;
-                    printf("Number of clients now %d\n", nfds);
                 }
+                //if our filedes struct array is full, there are three options
+                //1 there have been disconnects, in which case we can overwrite those with the new one
+                //2 there have been LOTS of disconnects, in which case we should shrink the struct
+                //3 there have been no disconnects, in which case we should increase the size of the array.
+                else
+                {
+                    printf("Server full\n");
+                    //first check our new total number of clients
+                    int newnfds = 1; //gets 1 to start since we are adding one.
+                    bool disconnects = false;
+                    for (int i = 0; i < nfds; i++)
+                    {
+                        if (pollfds[i].fd == -1)
+                        {
+                            disconnects = true;
+                        }
+                        else newnfds++;
+                    }
+
+
+                    //Case where we have disconnects and new number of fds is less than a quarter that of
+                    // previous number. Halve size of struct to save space, but still leaving room in case we
+                    //have new joins shortly after reallocating, in order to avoid copying too much.
+                    if (disconnects && (newnfds < nfds / 4))
+                    {
+                        printf("Shrinking server\n");
+                        pollfd_struct_size /= 2;
+                        struct pollfd * new = malloc(sizeof(struct pollfd) * (pollfd_struct_size));
+                        struct pollfd * temp;
+                        int j = 0;
+                        for (int i = 0; i < nfds; i++)
+                        {
+                            //copy only non disconnected 
+                            if (pollfds[i].fd > -1)
+                            {
+                                new[j].fd == pollfds[i].fd;
+                                j++;
+                            }
+                        }
+
+                        temp = pollfds;
+                        pollfds = new;
+                        free(temp);
+
+                        nfds = newnfds;
+                        addfdtopoll(pipefd[1], pollfds, nfds);
+                        nfds++;
+                    }
+                    else if (disconnects)
+                    {
+                        printf("Shuffling server\n");
+                        //sort array, shuffling closed sockets to top. they can then be overwritten with incoming
+                        qsort(pollfds, nfds, sizeof(struct pollfd), cmpfunc);
+
+                        nfds = newnfds;
+                        addfdtopoll(pipefd[1], pollfds, nfds);
+                        nfds++;
+                    }
+                    else
+                    {
+                        printf("Increasing server\n");
+                        //case where no disconnects -- double size of pollfd struct to accomodate, then copy
+                        pollfd_struct_size *= 2;
+                        struct pollfd * new = malloc(sizeof(struct pollfd) * pollfd_struct_size);
+                        struct pollfd * temp;
+                        memcpy(new, pollfds, sizeof(struct pollfd) * nfds);
+                        
+                        temp = pollfds;
+                        pollfds = new;
+                        free(temp);
+                        
+                        nfds = newnfds;
+                        addfdtopoll(pipefd[1], pollfds, nfds); 
+                        nfds++;
+
+                    }
+                }
+                printf("Existing sockets are on [");
+                for (int i = 0; i < nfds; i++) {
+                    printf("%d, ", pollfds[i].fd);
+                }
+                printf("]\n");
             }
 
-            for (int i = 1; i < nfds; i++) {
-                if (pollfds[i].revents & POLLIN) {
-                    printf("Signal recieved on %d\n", pollfds[i].fd);
-                    if (receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE) < 0) {
-                        //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
+            for (int i = 1; i < nfds; i++)
+            {
+                if (pollfds[i].fd == -1) continue;
+                if (pollfds[i].revents & POLLIN)
+                {
+                    //if signal recieved, read bytes from that fd into buffer, then subsequently broadcast to all other clients
+                    if (receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE) < 0)
+                    {
+                        //if this function returns less than 0, there was an error or client disconnect.
                         pollfds[i].events = 0;
-                        shutdown(pollfds[i].fd, SHUT_RDWR);
                         close(pollfds[i].fd);
-                        printf("Closed fd %d\n", pollfds[i].fd);
+                        printf("Closed fd %d on read, with errno: %d\n", pollfds[i].fd, errno);
+                        pollfds[i].fd = -1;
                     }
-                    for (int j = 1; j < nfds; j++) {
-                        if (j != i) {
-                            if (sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE) < 0) {
-                                //if this function returns less than 0, there was an error or client disconnect. In lieu of reshuffling array down on each disconnect, temp measure here is to no longer care about it.
+                    for (int j = 1; j < nfds; j++)
+                    {
+                        if (pollfds[j].fd == -1) continue;
+                        if (j != i)
+                        {
+                            if (sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE) < 0)
+                            {
+                                //if this function returns less than 0, there was an error or client disconnect.
                                 pollfds[j].events = 0;
-                                shutdown(pollfds[i].fd, SHUT_RDWR);
                                 close(pollfds[i].fd);
-                                printf("Closed fd %d\n", pollfds[i].fd);
+                                printf("Closed fd %d on send, with errno: %d\n", pollfds[i].fd, errno);
                             }
                         }
                     }
@@ -164,25 +260,24 @@ int main(int argc, char * argv[]) {
                     memset(buffer, 0, BUFFERSIZE);
                 }
             }
-            //add code to deal with clients dropping
-            //add code to identify clients by name --- could send via pipe as a header?
         }
     }
 }
 
 // adapted from http://man7.org/tlpi/code/online/dist/sockets/scm_rights_send.c.html
-int send_fd_pipe(int pipe, int sendfd) {
+int send_fd_pipe(int pipe, int sendfd)
+{
     struct msghdr msgh;
     struct iovec iov;
     int iovdata;
     int sent;
 
-    //need to define this as a union so that the message is aligned properly -- i dont quite get why, but oh well
+    //need to define this as a union so that the message is aligned properly -- i dont quite get why, but source says its needed
     union {
         char container[CMSG_SPACE(sizeof(int))];
         struct cmsghdr fill;
     } cMsg;
-    struct cmsghdr * cmsgptr;
+    struct cmsghdr *cmsgptr;
 
     msgh.msg_name = NULL;
     msgh.msg_namelen = 0;
@@ -203,17 +298,19 @@ int send_fd_pipe(int pipe, int sendfd) {
     cmsgptr->cmsg_type = SCM_RIGHTS;
 
     // cast the pointer that cmsg_data points to to an int, then dereference it
-    * ((int *) CMSG_DATA(cmsgptr)) = sendfd;
-    
+    *((int *)CMSG_DATA(cmsgptr)) = sendfd;
+
     // having constructed the msgheader and the control msghdr ancillary data, we send it down the pipe to child process.
-    if ((sent = sendmsg(pipe, &msgh, 0)) < 0) {
+    if ((sent = sendmsg(pipe, &msgh, 0)) < 0)
+    {
         return -1;
     }
     return 0;
 }
 
 //adapted from http://man7.org/tlpi/code/online/dist/sockets/scm_rights_recv.c.html
-int recv_fd_pipe(int pipe) {
+int recv_fd_pipe(int pipe)
+{
     int recvfd;
     int nr;
     struct msghdr msgh;
@@ -223,7 +320,7 @@ int recv_fd_pipe(int pipe) {
         char container[CMSG_SPACE(sizeof(int))];
         struct cmsghdr fill;
     } cMsg;
-    struct cmsghdr * cmsgptr;
+    struct cmsghdr *cmsgptr;
 
     //set up message to recieve data from parent
     msgh.msg_name = NULL;
@@ -237,25 +334,52 @@ int recv_fd_pipe(int pipe) {
     msgh.msg_controllen = sizeof(cMsg.container);
 
     //receive data and fd
-    if ((nr = recvmsg(pipe, &msgh, 0)) < 0) {
+    if ((nr = recvmsg(pipe, &msgh, 0)) < 0)
+    {
         return -1;
     }
 
     cmsgptr = CMSG_FIRSTHDR(&msgh);
-    if (cmsgptr == NULL || cmsgptr->cmsg_len != CMSG_LEN(sizeof(int))) {
+    if (cmsgptr == NULL || cmsgptr->cmsg_len != CMSG_LEN(sizeof(int)))
+    {
         return -1;
     }
-    if (cmsgptr->cmsg_level != SOL_SOCKET) {
+    if (cmsgptr->cmsg_level != SOL_SOCKET)
+    {
         return -2;
     }
-    if (cmsgptr->cmsg_type != SCM_RIGHTS) {
+    if (cmsgptr->cmsg_type != SCM_RIGHTS)
+    {
         return -3;
     }
 
-    if ((recvfd = (* ((int *) CMSG_DATA(cmsgptr)))) < 0) {
+    if ((recvfd = (*((int *)CMSG_DATA(cmsgptr)))) < 0)
+    {
         return -4;
     }
-    else {
+    else
+    {
         return recvfd;
     }
+}
+
+int addfdtopoll(int pipe, struct pollfd *fds, int nfds)
+{
+    int recvfd;
+    if ((recvfd = recv_fd_pipe(pipe)) < 0)
+    {
+        fprintf(stderr, "couldn't receive %d\n", recvfd);
+        return -1;
+    }
+    fds[nfds].fd = recvfd;
+    fds[nfds].events = POLLIN;
+    fds[nfds].revents = 0;
+    printf("Number of clients now %d\n", nfds);
+}
+
+int cmpfunc(const void * p1, const void * p2) {
+    if (((struct pollfd *) p1)->fd == -1) {
+        return 1;
+    }
+    else return 0;
 }
