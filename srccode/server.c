@@ -151,7 +151,7 @@ int main(int argc, char *argv[])
                 {
                     printf("Server full\n");
                     //first check our new total number of clients
-                    int newnfds = 1; //gets 1 to start since we are adding one.
+                    int newnfds = 0; 
                     bool disconnects = false;
                     for (int i = 0; i < nfds; i++)
                     {
@@ -241,6 +241,8 @@ int main(int argc, char *argv[])
                         printf("Closed fd %d on read, with errno: %d\n", pollfds[i].fd, errno);
                         pollfds[i].fd = -1;
                     }
+
+                    //decode func here 
                     for (int j = 1; j < nfds; j++)
                     {
                         if (pollfds[j].fd == -1) continue;
@@ -250,8 +252,9 @@ int main(int argc, char *argv[])
                             {
                                 //if this function returns less than 0, there was an error or client disconnect.
                                 pollfds[j].events = 0;
-                                close(pollfds[i].fd);
-                                printf("Closed fd %d on send, with errno: %d\n", pollfds[i].fd, errno);
+                                close(pollfds[j].fd);
+                                printf("Closed fd %d on send, with errno: %d\n", pollfds[j].fd, errno);
+                                pollfds[j].fd = -1;
                             }
                         }
                     }
