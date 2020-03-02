@@ -18,7 +18,7 @@
 struct clientinfo {
     int fd;
     unsigned int secretkey;
-    char * name;
+    char name[128];
 };
 
 //function declarations
@@ -166,7 +166,6 @@ int main(int argc, char *argv[])
                 {
                     //uses -- nfds and returns newnfds
                     //needs pipefd, ** pollfds (so we can change the first pointer?), nfds
-                    printf("Server full\n");
                     //first check our new total number of clients
                     int newnfds = 0;
                     bool disconnects = false;
@@ -183,7 +182,6 @@ int main(int argc, char *argv[])
                     //it just handles all the different resize conditions and resizes pollfd and clientinfo arrays
                     if (disconnects && (newnfds < nfds / 4))
                     {
-                        printf("Shrinking server\n");
                         pollfd_struct_size /= 2;
                         struct pollfd *pnew = shrinkpollarray(pollfds, pollfd_struct_size, nfds);
                         struct pollfd *ptemp = pollfds;
@@ -201,7 +199,6 @@ int main(int argc, char *argv[])
                     }
                     else if (disconnects)
                     {
-                        printf("Shuffling server\n");
                         //sort array, shuffling closed sockets to top. they can then be overwritten with incoming fd
                         qsort(pollfds, nfds, sizeof(struct pollfd), cmpfunc);
                         qsort(clients, nfds, sizeof(struct clientinfo), cmpfunc);
@@ -212,7 +209,6 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        printf("Increasing server\n");
                         //case where no disconnects -- double size of pollfd struct to accomodate, then copy
                         pollfd_struct_size *= 2;
                         struct pollfd *pnew = malloc(sizeof(struct pollfd) * pollfd_struct_size);
@@ -236,10 +232,8 @@ int main(int argc, char *argv[])
                 }
                 //change above to only edit clients struct, then regen pollfd here? 
                 //however seems like early optimisation, this works well enough
-                printf("Existing sockets are:\n");
-                for (int i = 0; i < nfds; i++)
-                {
-                    printf("pollstruct: %d\tclientstruct: %d\n", pollfds[i].fd, clients[i].fd);
+                for (int i = 0; i < nfds; i++) {
+                    printf("N: %s, K: %u, FD: %d\n", clients[i].name, clients[i].secretkey, clients[i].fd);
                 }
             }
             //basic loop -- handle receiving and sending messages
@@ -360,9 +354,10 @@ int addclient(int pipe, struct pollfd *fds, struct clientinfo * clients, int nfd
 
     clients[nfds].fd = recvfd;
     clients[nfds].secretkey = (unsigned int) strtoul(msgh->msg_iov[1].iov_base, NULL, 0);
-    clients[nfds].name = msgh->msg_iov[0].iov_base;
-
+    strcpy(clients[nfds].name, msgh->msg_iov[0].iov_base);
     printf("Number of clients now %d\n", nfds);
+    free(msgh);
+    return 0;
 }
 
 int cmpfunc(const void *p1, const void *p2)
@@ -406,7 +401,7 @@ struct clientinfo *shrinkclientarray(struct clientinfo *clients, int newsize, in
         {
             new[j].fd = clients[i].fd;
             new[j].secretkey = clients[i].secretkey;
-            new[j].name = clients[i].name;
+            strcpy(new[j].name, clients[i].name);
             j++;
         }
     }
@@ -469,6 +464,7 @@ int parent(
         return -1;
     }
     close(ioSock);
+    free(metadata);
     return 0;
 }
 
@@ -482,7 +478,9 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
         {
             //if signal recieved, read bytes from that fd into buffer, then subsequently broadcast to all other clients
             errno = 0;
-            if (receivexbytes(pollfds[i].fd, buffer, BUFFERSIZE) < 0)
+            printf("Message from %s\n", clients[i].name);
+            strcpy(buffer, clients[i].name);
+            if (receivexbytes(pollfds[i].fd, buffer + strlen(clients[i].name), BUFFERSIZE - strlen(clients[i].name)) < 0)
             {
                 //if this function returns less than 0, there was an error or client disconnect.
                 pollfds[i].events = 0;
