@@ -25,15 +25,11 @@ int main(int argc, char * argv[]) {
         return -1;
     }
 
-    int port;
-    int sock;
+    int port, sock, len, namelen;
     struct sockaddr_in serverAddr;
-    int len;
     char buffer[BUFFERSIZE];
-    char name[128];
+    char name[128], keybuf[128], serverkeybuf[128];
     strcpy(name, argv[3]);
-    char keybuf[128];
-    char serverkeybuf[128];
 
     //calculate D-H keys
     srand(time(NULL));
@@ -88,8 +84,11 @@ int main(int argc, char * argv[]) {
     pollfds[1].fd = sock;
     pollfds[1].events = POLLIN;
 
+    //ensures we send same bytes as server has space to receive
+    namelen = strlen(name) + 2;
+
     while (true) {
-        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE) < 0) {
+        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE, namelen) < 0) {
             break;
         }
     }
