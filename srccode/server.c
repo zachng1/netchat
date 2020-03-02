@@ -18,7 +18,7 @@
 struct clientinfo {
     int fd;
     unsigned int secretkey;
-    char name[128];
+    char * name;
 };
 
 //function declarations
@@ -31,8 +31,6 @@ struct clientinfo *shrinkclientarray(struct clientinfo *clients, int newsize, in
 int parent(int pipefd, int lsnSock, struct sockaddr_in *clientAddr, size_t clientLen, char * keyaschar, unsigned int privatekey);
 int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds, char *buffer, int BUFFERSIZE);
 
-
-
 int main(int argc, char *argv[])
 {
     if (argc != 2)
@@ -40,8 +38,19 @@ int main(int argc, char *argv[])
         printf("Usage: server port");
         return 1;
     }
+    errno = 0;
+    int port = (int)strtol(argv[1], NULL, 0);
+    if (errno != 0)
+    {
+        fprintf(stderr, "Invalid port number\n");
+        return 1;
+    }
+    if (port < 0 || port > 65536)
+    {
+        fprintf(stderr, "Invalid port number\n");
+        return 1;
+    }
 
-    int port;
     char buffer[BUFFERSIZE];
     int lsnSock;
     int ioSock;
@@ -60,18 +69,7 @@ int main(int argc, char *argv[])
     char keyaschar[128];
     sprintf(keyaschar, "%d", publickey);
 
-    errno = 0;
-    port = (int)strtol(argv[1], NULL, 0);
-    if (errno != 0)
-    {
-        fprintf(stderr, "Invalid port number\n");
-        return 1;
-    }
-    if (port < 0 || port > 65536)
-    {
-        fprintf(stderr, "Invalid port number\n");
-        return 1;
-    }
+    
 
     //setting up server address and client addresses.
     memset(&lsnAddr, 0, sizeof(lsnAddr));
@@ -137,6 +135,8 @@ int main(int argc, char *argv[])
 
         pollfds[0].fd = pipefd[1];
         pollfds[0].events = POLLIN;
+        clients[0].fd = pipefd[1];
+
         while (true)
         {
             errno = 0;
@@ -152,7 +152,10 @@ int main(int argc, char *argv[])
                 //total number of filedes
                 if (nfds < pollfd_struct_size)
                 {
-                    if (addclient(pipefd[1], pollfds, clients, nfds) < 0) return -1;
+                    if (addclient(pipefd[1], pollfds, clients, nfds) < 0) {
+                        fprintf(stderr, "error receiving this client\n");
+                        return -1;
+                    }
                     nfds++;
                 }
                 //if our filedes struct array is full, there are three options
@@ -177,7 +180,7 @@ int main(int argc, char *argv[])
                             newnfds++;
                     }
                     //this whole thing needs a lot of cleaning but that's a job for another day lol
-                    //it jsut handles all the different resize conditions and resizes pollfd and clientinfo arrays
+                    //it just handles all the different resize conditions and resizes pollfd and clientinfo arrays
                     if (disconnects && (newnfds < nfds / 4))
                     {
                         printf("Shrinking server\n");
@@ -232,12 +235,12 @@ int main(int argc, char *argv[])
                     }
                 }
                 //change above to only edit clients struct, then regen pollfd here? 
-                printf("Existing sockets are on [");
+                //however seems like early optimisation, this works well enough
+                printf("Existing sockets are:\n");
                 for (int i = 0; i < nfds; i++)
                 {
-                    printf("%d, ", pollfds[i].fd);
+                    printf("pollstruct: %d\tclientstruct: %d\n", pollfds[i].fd, clients[i].fd);
                 }
-                printf("]\n");
             }
             //basic loop -- handle receiving and sending messages
             //add logic to handle client info struct array and encode/decode messages + append name to messages
@@ -278,7 +281,6 @@ int send_fd_pipe(int pipe, int sendfd, struct msghdr * msgh)
     // having constructed the msgheader and the control msghdr ancillary data, we send it down the pipe to child process.
     while (true) {
         sent = sendmsg(pipe, msgh, 0);
-        printf("Parent sent %d bytes with name %s and key %s\n", sent, (char *) msgh->msg_iov[0].iov_base, (char *) msgh->msg_iov[1].iov_base);
         if (sent < 0) return -1;
         else return 0;
     }
@@ -298,16 +300,16 @@ struct msghdr * recv_fd_pipe(int pipe)
 
     struct iovec * iov = malloc(sizeof(struct iovec) * 2);
     struct msghdr * metadata;
-    char namebuf[128];
     //very basic implementation of dh exchange atm
     char keybuf[128];
+    char namebuf[128];
     strcpy(keybuf, "EMPTY");
 
     //set up message to recieve data from parent
     msgh->msg_name = NULL;
     msgh->msg_namelen = 0;
     msgh->msg_iov = iov;
-    msgh->msg_iovlen = 1;
+    msgh->msg_iovlen = 2;
     iov[0].iov_base = namebuf;
     iov[0].iov_len = 128;
     iov[1].iov_base = keybuf;
@@ -316,14 +318,9 @@ struct msghdr * recv_fd_pipe(int pipe)
     msgh->msg_control = cMsg.container;
     msgh->msg_controllen = sizeof(cMsg.container);
 
-    //receive data and fd --- EDIT
-    for (int i = 0; i < 2; i++) {
-        nr = recvmsg(pipe, msgh, MSG_WAITALL);
-        printf("Child received %d bytes with name: %s and key: %s\n", nr, (char *) msgh->msg_iov[0].iov_base, (char *) msgh->msg_iov[1].iov_base);
-        if (nr < 0) return NULL;
-        else if (nr == 0 ) break;
-    }
-
+    //receive data and fd
+    nr = recvmsg(pipe, msgh, 0);
+    if (nr < 0) return NULL;
     return msgh;
 }
 
@@ -363,7 +360,7 @@ int addclient(int pipe, struct pollfd *fds, struct clientinfo * clients, int nfd
 
     clients[nfds].fd = recvfd;
     clients[nfds].secretkey = (unsigned int) strtoul(msgh->msg_iov[1].iov_base, NULL, 0);
-    strcpy(clients[nfds].name, msgh->msg_iov[0].iov_base);
+    clients[nfds].name = msgh->msg_iov[0].iov_base;
 
     printf("Number of clients now %d\n", nfds);
 }
@@ -409,7 +406,7 @@ struct clientinfo *shrinkclientarray(struct clientinfo *clients, int newsize, in
         {
             new[j].fd = clients[i].fd;
             new[j].secretkey = clients[i].secretkey;
-            strcpy(new[j].name, clients[i].name);
+            new[j].name = clients[i].name;
             j++;
         }
     }
@@ -471,7 +468,6 @@ int parent(
         fprintf(stderr, "Couldn't send to child %d\n", errno);
         return -1;
     }
-    printf("added %s to room\n", inet_ntoa(clientAddr->sin_addr));
     close(ioSock);
     return 0;
 }
