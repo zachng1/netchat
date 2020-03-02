@@ -35,9 +35,8 @@ int sendxbytes(int socketid, char * buff, size_t bufflen) {
     return total;
 }
 
-int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, size_t bufferlen, const char * name) {
+int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, size_t bufferlen) {
     char * bufferpointer = buffer;
-    int namelen;
     int events = poll(fds, 2, -1);
     // receive before sending -- maybe better? Or order arbitrary?
     if (fds[1].revents & POLLIN) {
@@ -49,16 +48,10 @@ int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, siz
     }
 
     if (fds[0].revents & POLLIN) {
-        //write user's name to front of buffer before sending -- so other users know who said what
-        namelen = sprintf(buffer, "%s: ", name);
-        bufferpointer += namelen;
 
-        fgets(bufferpointer, ((int) bufferlen) - namelen, stdin); 
-        if (strcmp(bufferpointer, "EXIT\n") == 0) {
-            printf("EXIT received, shutdown\n");
-            return -1;
-        }
-        else if (sendxbytes(socketid, buffer, bufferlen) < 0) {
+        fgets(bufferpointer, ((int) bufferlen), stdin);
+        //encode function here 
+        if (sendxbytes(socketid, buffer, bufferlen) < 0) {
             return -1;
         }
         memset(buffer, 0, bufferlen); //clean up buffer for next send / receipt

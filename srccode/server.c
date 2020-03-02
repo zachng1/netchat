@@ -10,17 +10,28 @@
 #include <unistd.h>
 #include <poll.h>
 #include <errno.h>
-#include "commonfunc.h"
 #include <stropts.h>
+#include <time.h>
+#include "commonfunc.h"
+#include "encryption.h"
+
+struct clientinfo {
+    int fd;
+    unsigned int secretkey;
+    char name[128];
+};
 
 //function declarations
-int send_fd_pipe(int pipe, int sendfd);
-int recv_fd_pipe(int pipe);
-int addfdtopoll(int pipe, struct pollfd *fds, int nfds);
+int send_fd_pipe(int pipe, int sendfd, struct msghdr * msgh);
+struct msghdr * recv_fd_pipe(int pipe);
+int addclient(int pipe, struct pollfd *fds, struct clientinfo * clients, int nfds);
 int cmpfunc(const void *p1, const void *p2);
-struct pollfd *shrinkarray(struct pollfd *fdarray, int newsize, int nfds);
-int parent(int pipefd, int lsnSock, struct sockaddr_in *clientAddr, size_t clientLen);
-int serverbroadcast(struct pollfd *pollfds, int nfds, char *buffer, int BUFFERSIZE);
+struct pollfd *shrinkpollarray(struct pollfd *fdarray, int newsize, int nfds);
+struct clientinfo *shrinkclientarray(struct clientinfo *clients, int newsize, int nfds);
+int parent(int pipefd, int lsnSock, struct sockaddr_in *clientAddr, size_t clientLen, char * keyaschar, unsigned int privatekey);
+int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds, char *buffer, int BUFFERSIZE);
+
+
 
 int main(int argc, char *argv[])
 {
@@ -39,6 +50,15 @@ int main(int argc, char *argv[])
     struct sockaddr_in lsnAddr;
     struct sockaddr_in clientAddr;
     size_t clientLen = sizeof(clientAddr);
+
+    //calculate D-H keys
+    srand(time(NULL));
+    //mod P because it kept overflowing unsigned int
+    //not the most secure encryption anyway, this is more of an demonstrative exercise
+    unsigned int privatekey = (unsigned int) rand() % P;
+    unsigned int publickey = calcPublicKey(privatekey);
+    char keyaschar[128];
+    sprintf(keyaschar, "%d", publickey);
 
     errno = 0;
     port = (int)strtol(argv[1], NULL, 0);
@@ -94,7 +114,7 @@ int main(int argc, char *argv[])
         close(pipefd[1]);
         while (true)
         {
-            parent(pipefd[0], lsnSock, &clientAddr, clientLen);
+            parent(pipefd[0], lsnSock, &clientAddr, clientLen, keyaschar, privatekey);
         }
     }
 
@@ -111,7 +131,9 @@ int main(int argc, char *argv[])
         int pollfd_struct_size = 8;
         int recvfd;
         //pollfd will read pipe and client fds
-        struct pollfd *pollfds = malloc(sizeof(struct pollfd) * pollfd_struct_size);
+        struct pollfd * pollfds = malloc(sizeof(struct pollfd) * pollfd_struct_size);
+        struct clientinfo * clients = malloc(sizeof(struct clientinfo) * pollfd_struct_size);
+        
 
         pollfds[0].fd = pipefd[1];
         pollfds[0].events = POLLIN;
@@ -130,7 +152,7 @@ int main(int argc, char *argv[])
                 //total number of filedes
                 if (nfds < pollfd_struct_size)
                 {
-                    addfdtopoll(pipefd[1], pollfds, nfds);
+                    if (addclient(pipefd[1], pollfds, clients, nfds) < 0) return -1;
                     nfds++;
                 }
                 //if our filedes struct array is full, there are three options
@@ -154,18 +176,24 @@ int main(int argc, char *argv[])
                         else
                             newnfds++;
                     }
-
+                    //this whole thing needs a lot of cleaning but that's a job for another day lol
+                    //it jsut handles all the different resize conditions and resizes pollfd and clientinfo arrays
                     if (disconnects && (newnfds < nfds / 4))
                     {
                         printf("Shrinking server\n");
                         pollfd_struct_size /= 2;
-                        struct pollfd *new = shrinkarray(pollfds, pollfd_struct_size, nfds);
-                        struct pollfd *temp = pollfds;
-                        pollfds = new;
-                        free(temp);
+                        struct pollfd *pnew = shrinkpollarray(pollfds, pollfd_struct_size, nfds);
+                        struct pollfd *ptemp = pollfds;
+                        pollfds = pnew;
+                        free(ptemp);
+
+                        struct clientinfo *cnew = shrinkclientarray(clients, pollfd_struct_size, nfds);
+                        struct clientinfo *ctemp = clients;
+                        clients = cnew;
+                        free(ctemp);
 
                         nfds = newnfds;
-                        addfdtopoll(pipefd[1], pollfds, nfds);
+                        addclient(pipefd[1], pollfds, clients, nfds);
                         nfds++;
                     }
                     else if (disconnects)
@@ -173,9 +201,10 @@ int main(int argc, char *argv[])
                         printf("Shuffling server\n");
                         //sort array, shuffling closed sockets to top. they can then be overwritten with incoming fd
                         qsort(pollfds, nfds, sizeof(struct pollfd), cmpfunc);
+                        qsort(clients, nfds, sizeof(struct clientinfo), cmpfunc);
 
                         nfds = newnfds;
-                        addfdtopoll(pipefd[1], pollfds, nfds);
+                        addclient(pipefd[1], pollfds, clients, nfds);
                         nfds++;
                     }
                     else
@@ -183,19 +212,26 @@ int main(int argc, char *argv[])
                         printf("Increasing server\n");
                         //case where no disconnects -- double size of pollfd struct to accomodate, then copy
                         pollfd_struct_size *= 2;
-                        struct pollfd *new = malloc(sizeof(struct pollfd) * pollfd_struct_size);
-                        struct pollfd *temp;
-                        memcpy(new, pollfds, sizeof(struct pollfd) * nfds);
+                        struct pollfd *pnew = malloc(sizeof(struct pollfd) * pollfd_struct_size);
+                        struct pollfd *ptemp;
+                        memcpy(pnew, pollfds, sizeof(struct pollfd) * nfds);
+                        ptemp = pollfds;
+                        pollfds = pnew;
+                        free(ptemp);
 
-                        temp = pollfds;
-                        pollfds = new;
-                        free(temp);
+                        struct clientinfo *cnew = malloc(sizeof(struct clientinfo) * pollfd_struct_size);
+                        struct clientinfo *ctemp;
+                        memcpy(cnew, clients, sizeof(struct clientinfo) * nfds);
+                        ctemp = clients;
+                        clients = cnew;
+                        free(ctemp);
 
                         nfds = newnfds;
-                        addfdtopoll(pipefd[1], pollfds, nfds);
+                        addclient(pipefd[1], pollfds, clients, nfds);
                         nfds++;
                     }
                 }
+                //change above to only edit clients struct, then regen pollfd here? 
                 printf("Existing sockets are on [");
                 for (int i = 0; i < nfds; i++)
                 {
@@ -204,7 +240,8 @@ int main(int argc, char *argv[])
                 printf("]\n");
             }
             //basic loop -- handle receiving and sending messages
-            serverbroadcast(pollfds, nfds, buffer, BUFFERSIZE);
+            //add logic to handle client info struct array and encode/decode messages + append name to messages
+            serverbroadcast(pollfds, clients, nfds, buffer, BUFFERSIZE);
         }
     }
 }
@@ -212,11 +249,9 @@ int main(int argc, char *argv[])
 //function definitions
 
 // adapted from http://man7.org/tlpi/code/online/dist/sockets/scm_rights_send.c.html
-int send_fd_pipe(int pipe, int sendfd)
+// expects msghdr already has msg_iov & msg_iolen fields filled
+int send_fd_pipe(int pipe, int sendfd, struct msghdr * msgh)
 {
-    struct msghdr msgh;
-    struct iovec iov;
-    int iovdata;
     int sent;
 
     //need to define this as a union so that the message is aligned properly -- i dont quite get why, but source says its needed
@@ -226,20 +261,13 @@ int send_fd_pipe(int pipe, int sendfd)
     } cMsg;
     struct cmsghdr *cmsgptr;
 
-    msgh.msg_name = NULL;
-    msgh.msg_namelen = 0;
+    msgh->msg_name = NULL;
+    msgh->msg_namelen = 0;
 
-    //need to send some 'real' data in the message in order to transmit the control message header which includes the fd
-    msgh.msg_iov = &iov;
-    msgh.msg_iovlen = 1;
-    iov.iov_base = &iovdata;
-    iov.iov_len = sizeof(int);
-    iovdata = 69;
+    msgh->msg_control = cMsg.container;
+    msgh->msg_controllen = sizeof(cMsg.container);
 
-    msgh.msg_control = cMsg.container;
-    msgh.msg_controllen = sizeof(cMsg.container);
-
-    cmsgptr = CMSG_FIRSTHDR(&msgh);
+    cmsgptr = CMSG_FIRSTHDR(msgh);
     cmsgptr->cmsg_len = CMSG_LEN(sizeof(int));
     cmsgptr->cmsg_level = SOL_SOCKET;
     cmsgptr->cmsg_type = SCM_RIGHTS;
@@ -248,79 +276,95 @@ int send_fd_pipe(int pipe, int sendfd)
     *((int *)CMSG_DATA(cmsgptr)) = sendfd;
 
     // having constructed the msgheader and the control msghdr ancillary data, we send it down the pipe to child process.
-    if ((sent = sendmsg(pipe, &msgh, 0)) < 0)
-    {
-        return -1;
+    while (true) {
+        sent = sendmsg(pipe, msgh, 0);
+        printf("Parent sent %d bytes with name %s and key %s\n", sent, (char *) msgh->msg_iov[0].iov_base, (char *) msgh->msg_iov[1].iov_base);
+        if (sent < 0) return -1;
+        else return 0;
     }
-    return 0;
 }
 
 //adapted from http://man7.org/tlpi/code/online/dist/sockets/scm_rights_recv.c.html
-int recv_fd_pipe(int pipe)
+struct msghdr * recv_fd_pipe(int pipe)
 {
     int recvfd;
     int nr;
-    struct msghdr msgh;
-    struct iovec iov;
-    int iovdata;
+    struct msghdr * msgh = malloc(sizeof(struct msghdr));
+    
     union {
         char container[CMSG_SPACE(sizeof(int))];
         struct cmsghdr fill;
     } cMsg;
-    struct cmsghdr *cmsgptr;
+
+    struct iovec * iov = malloc(sizeof(struct iovec) * 2);
+    struct msghdr * metadata;
+    char namebuf[128];
+    //very basic implementation of dh exchange atm
+    char keybuf[128];
+    strcpy(keybuf, "EMPTY");
 
     //set up message to recieve data from parent
-    msgh.msg_name = NULL;
-    msgh.msg_namelen = 0;
-    msgh.msg_iov = &iov;
-    msgh.msg_iovlen = 1;
-    iov.iov_base = &iovdata;
-    iov.iov_len = sizeof(int);
+    msgh->msg_name = NULL;
+    msgh->msg_namelen = 0;
+    msgh->msg_iov = iov;
+    msgh->msg_iovlen = 1;
+    iov[0].iov_base = namebuf;
+    iov[0].iov_len = 128;
+    iov[1].iov_base = keybuf;
+    iov[1].iov_len = 128;
 
-    msgh.msg_control = cMsg.container;
-    msgh.msg_controllen = sizeof(cMsg.container);
+    msgh->msg_control = cMsg.container;
+    msgh->msg_controllen = sizeof(cMsg.container);
 
-    //receive data and fd
-    if ((nr = recvmsg(pipe, &msgh, 0)) < 0)
-    {
-        return -1;
+    //receive data and fd --- EDIT
+    for (int i = 0; i < 2; i++) {
+        nr = recvmsg(pipe, msgh, MSG_WAITALL);
+        printf("Child received %d bytes with name: %s and key: %s\n", nr, (char *) msgh->msg_iov[0].iov_base, (char *) msgh->msg_iov[1].iov_base);
+        if (nr < 0) return NULL;
+        else if (nr == 0 ) break;
     }
 
-    cmsgptr = CMSG_FIRSTHDR(&msgh);
+    return msgh;
+}
+
+int addclient(int pipe, struct pollfd *fds, struct clientinfo * clients, int nfds)
+{
+    struct msghdr * msgh;
+    struct cmsghdr * cmsgptr;
+    int recvfd;
+
+    msgh = recv_fd_pipe(pipe);
+    if (msgh == NULL)
+    {
+        fprintf(stderr, "couldn't receive %d\n", recvfd);
+        return -1;
+    }
+    cmsgptr = CMSG_FIRSTHDR(msgh);
     if (cmsgptr == NULL || cmsgptr->cmsg_len != CMSG_LEN(sizeof(int)))
     {
         return -1;
     }
     if (cmsgptr->cmsg_level != SOL_SOCKET)
     {
-        return -2;
+        return -1;
     }
     if (cmsgptr->cmsg_type != SCM_RIGHTS)
     {
-        return -3;
-    }
-
-    if ((recvfd = (*((int *)CMSG_DATA(cmsgptr)))) < 0)
-    {
-        return -4;
-    }
-    else
-    {
-        return recvfd;
-    }
-}
-
-int addfdtopoll(int pipe, struct pollfd *fds, int nfds)
-{
-    int recvfd;
-    if ((recvfd = recv_fd_pipe(pipe)) < 0)
-    {
-        fprintf(stderr, "couldn't receive %d\n", recvfd);
         return -1;
     }
+    if ((recvfd = (*((int *)CMSG_DATA(cmsgptr)))) < 0)
+    {
+        return -1;
+    }
+
     fds[nfds].fd = recvfd;
     fds[nfds].events = POLLIN;
     fds[nfds].revents = 0;
+
+    clients[nfds].fd = recvfd;
+    clients[nfds].secretkey = (unsigned int) strtoul(msgh->msg_iov[1].iov_base, NULL, 0);
+    strcpy(clients[nfds].name, msgh->msg_iov[0].iov_base);
+
     printf("Number of clients now %d\n", nfds);
 }
 
@@ -334,7 +378,7 @@ int cmpfunc(const void *p1, const void *p2)
         return 0;
 }
 
-struct pollfd *shrinkarray(struct pollfd *fdarray,
+struct pollfd *shrinkpollarray(struct pollfd *fdarray,
                            int newsize,
                            int nfds)
 {
@@ -342,32 +386,87 @@ struct pollfd *shrinkarray(struct pollfd *fdarray,
         return NULL; //should not be shrinking if more fds than shrink size
 
     struct pollfd *new = malloc(sizeof(struct pollfd) * (newsize));
-    int j = 0;
-    for (int i = 0; i < nfds; i++)
+    for (int i = 0, j = 0; i < nfds; i++)
     {
         //copy only non disconnected
         if (fdarray[i].fd > -1)
         {
-            new[j].fd == fdarray[i].fd;
-            j++;
+            new[j++].fd == fdarray[i].fd;
         }
     }
     return new;
 }
-int parent(int pipefd, int lsnSock, struct sockaddr_in *clientAddr, size_t clientLen)
+
+struct clientinfo *shrinkclientarray(struct clientinfo *clients, int newsize, int nfds) {
+    if (nfds > newsize) return NULL; //same as shrink poll -- shouldn't shrink if nfds larger than size
+
+    struct clientinfo *new = malloc(sizeof(struct clientinfo) * newsize);
+    int j = 0;
+    for (int i = 0, j = 0; i < nfds; i++)
+    {
+        //copy only non disconnected
+        if (clients[i].fd > -1)
+        {
+            new[j].fd = clients[i].fd;
+            new[j].secretkey = clients[i].secretkey;
+            strcpy(new[j].name, clients[i].name);
+            j++;
+        }
+    }
+    return new;
+
+}
+
+int parent(
+    int pipefd, 
+    int lsnSock, 
+    struct sockaddr_in *clientAddr, 
+    size_t clientLen, 
+    char * keyaschar, 
+    unsigned int privatekey)
 {
     int ioSock;
-    struct iovec * iov;
+    struct iovec * iov = malloc(sizeof(struct iovec) * 2);
+    struct msghdr * metadata = malloc(sizeof(struct msghdr));
+    char namebuf[128];
+    //very basic implementation of dh exchange atm
+    char keybuf[128];
+
     errno = 0;
     if ((ioSock = accept(lsnSock, (struct sockaddr *)clientAddr, (socklen_t *)&clientLen)) < 0)
     {
         fprintf(stderr, "couldn't accept incoming client %d\n", errno);
         return -1;
     }
+    if (receivexbytes(ioSock, keybuf, 128) < 0) {
+        fprintf(stderr, "Couldn't receive client's key\n");
+        return -1;
+    }
+    if (sendxbytes(ioSock, keyaschar, 128) < 0) {
+        fprintf(stderr, "Couldn't send own key to client\n");
+        return -1;
+    }
+    if (receivexbytes(ioSock, namebuf, 128) < 0) {
+        fprintf(stderr, "Couldn't receive name\n");
+        return -1;
+    }
+    unsigned int clientkey = (unsigned int) strtoul(keybuf, NULL, 0);
+    unsigned int secretkey = calcSharedSecret(clientkey, privatekey);
+    memset(keybuf, 0, 128);
+    sprintf(keybuf, "%d", secretkey);
 
-    //build iovec with clientAddr->sin_addr, and received public key/name
+
+
+    metadata->msg_iov = iov;
+    metadata->msg_iovlen = 2; //public key, client name
+    iov[0].iov_base = namebuf;
+    iov[0].iov_len = 128;
+    iov[1].iov_base = keybuf;
+    iov[1].iov_len = 128;
+    
+
     errno = 0;
-    if (send_fd_pipe(pipefd, ioSock) < 0)
+    if (send_fd_pipe(pipefd, ioSock, metadata) < 0)
     {
         fprintf(stderr, "Couldn't send to child %d\n", errno);
         return -1;
@@ -377,7 +476,7 @@ int parent(int pipefd, int lsnSock, struct sockaddr_in *clientAddr, size_t clien
     return 0;
 }
 
-int serverbroadcast(struct pollfd *pollfds, int nfds, char *buffer, int BUFFERSIZE)
+int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds, char *buffer, int BUFFERSIZE)
 {
     for (int i = 1; i < nfds; i++)
     {
@@ -394,6 +493,7 @@ int serverbroadcast(struct pollfd *pollfds, int nfds, char *buffer, int BUFFERSI
                 close(pollfds[i].fd);
                 printf("Closed fd %d on read, with errno: %d\n", pollfds[i].fd, errno);
                 pollfds[i].fd = -1;
+                clients[i].fd = -1;
             }
 
             //decode func here
@@ -410,6 +510,7 @@ int serverbroadcast(struct pollfd *pollfds, int nfds, char *buffer, int BUFFERSI
                         close(pollfds[j].fd);
                         printf("Closed fd %d on send, with errno: %d\n", pollfds[j].fd, errno);
                         pollfds[j].fd = -1;
+                        clients[i].fd = -1;
                     }
                 }
             }

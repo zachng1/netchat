@@ -8,15 +8,21 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <poll.h>
-#include <signal.h>
 #include <errno.h>
+#include <time.h>
+#include <limits.h>
 #include "commonfunc.h"
+#include "encryption.h"
 
 int main(int argc, char * argv[]) {
 
     if (argc != 4) {
         fprintf(stderr, "Usage: client ipaddress port displayname");
-        return 1;
+        return -1;
+    }
+    else if (strlen(argv[3]) > 127) {
+        fprintf(stderr, "Name too long\n");
+        return -1;
     }
 
     int port;
@@ -24,6 +30,20 @@ int main(int argc, char * argv[]) {
     struct sockaddr_in serverAddr;
     int len;
     char buffer[BUFFERSIZE];
+    char name[128];
+    strcpy(name, argv[3]);
+    char keybuf[128];
+    char serverkeybuf[128];
+
+    //calculate D-H keys
+    srand(time(NULL));
+    //mod P because it kept overflowing unsigned int
+    //not the most secure encryption anyway, this is more of an demonstrative exercise
+    unsigned int privatekey = (unsigned int) rand() % P;
+    unsigned int publickey = calcPublicKey(privatekey);
+    sprintf(keybuf, "%d", publickey); 
+    
+
 
     errno = 0;
     port = (int) strtol(argv[2], NULL, 0);
@@ -55,6 +75,12 @@ int main(int argc, char * argv[]) {
     }
     printf("Connected! Send EXIT to close.\n");
 
+    sendxbytes(sock, keybuf, 128);
+    receivexbytes(sock, serverkeybuf, 128);
+    sendxbytes(sock, name, 128);
+    unsigned int serverkey = (unsigned int) strtoul(serverkeybuf, NULL, 0);
+    unsigned int secretkey = calcSharedSecret(serverkey, privatekey);
+
     //create pollfd for stdin and ioSock
     struct pollfd pollfds[2];
     pollfds[0].fd = 0;
@@ -63,7 +89,7 @@ int main(int argc, char * argv[]) {
     pollfds[1].events = POLLIN;
 
     while (true) {
-        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE, argv[3]) < 0) {
+        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE) < 0) {
             break;
         }
     }
