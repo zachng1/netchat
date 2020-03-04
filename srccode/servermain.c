@@ -116,7 +116,6 @@ int main(int argc, char *argv[])
         //pollfd will read pipe and client fds
         struct pollfd * pollfds = malloc(sizeof(struct pollfd) * pollfd_struct_size);
         struct clientinfo * clients = malloc(sizeof(struct clientinfo) * pollfd_struct_size);
-        
 
         pollfds[0].fd = pipefd[1];
         pollfds[0].events = POLLIN;
@@ -216,7 +215,7 @@ int main(int argc, char *argv[])
                     }
                 }
                 //change above to only edit clients struct, then regen pollfd here? 
-                //however seems like early optimisation, this works well enough
+                //however early optimisation, this works well enough
             }
             //basic loop -- handle receiving and sending messages
             //add logic to handle client info struct array and encode/decode messages + append name to messages

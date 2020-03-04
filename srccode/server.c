@@ -271,6 +271,9 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
             //decode func here
             for (int j = 1; j < nfds; j++)
             {
+                //check we didn't receive a close signal on read -- if so, skip broadcast
+                if (pollfds[i].fd == -1) 
+                    break;
                 if (pollfds[j].fd == -1)
                     continue;
                 if (j != i)
