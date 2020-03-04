@@ -88,7 +88,7 @@ int main(int argc, char * argv[]) {
     namelen = strlen(name) + 2;
 
     while (true) {
-        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE, namelen) < 0) {
+        if (send_and_receive(pollfds, sock, buffer, BUFFERSIZE, namelen, secretkey) < 0) {
             break;
         }
     }

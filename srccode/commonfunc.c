@@ -6,6 +6,7 @@
 #include <poll.h>
 #include <string.h>
 #include "commonfunc.h"
+#include "encryption.h"
 
 const size_t BUFFERSIZE = 1024;
 
@@ -35,13 +36,14 @@ int sendxbytes(int socketid, char * buff, size_t bufflen) {
     return total;
 }
 
-int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, size_t bufferlen, size_t namelen) {
+int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, size_t bufferlen, size_t namelen, unsigned int key) {
     int events = poll(fds, 2, -1);
     // receive before sending -- maybe better? Or order arbitrary?
     if (fds[1].revents & POLLIN) {
         if (receivexbytes(socketid, buffer, bufferlen) < 0) {
             return -1;
         }
+        decryptmessage(buffer, bufferlen, key);
         printf("%s", buffer);
         memset(buffer, 0, bufferlen); //clean up buffer for next send / receipt
     }
@@ -49,7 +51,7 @@ int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, siz
     if (fds[0].revents & POLLIN) {
 
         fgets(buffer, bufferlen, stdin);
-        //encode function here 
+        encryptmessage(buffer, bufferlen - namelen, key);
         if (sendxbytes(socketid, buffer, bufferlen - namelen) < 0) {
             return -1;
         }

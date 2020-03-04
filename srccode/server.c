@@ -69,7 +69,6 @@ struct msghdr * recv_fd_pipe(int pipe)
     //very basic implementation of dh exchange atm
     char keybuf[128];
     char namebuf[128];
-    strcpy(keybuf, "EMPTY");
 
     //set up message to recieve data from parent
     msgh->msg_name = NULL;
@@ -127,7 +126,7 @@ int addclient(int pipe, struct pollfd *fds, struct clientinfo * clients, int nfd
     clients[nfds].fd = recvfd;
     clients[nfds].secretkey = (unsigned int) strtoul(msgh->msg_iov[1].iov_base, NULL, 0);
     strcpy(clients[nfds].name, msgh->msg_iov[0].iov_base);
-    printf("Number of clients now %d\n", nfds);
+    printf("Number of clients now %d.\n", nfds);
     free(msgh);
     return 0;
 }
@@ -186,7 +185,7 @@ int parent(
     int lsnSock, 
     struct sockaddr_in *clientAddr, 
     size_t clientLen, 
-    char * keyaschar, 
+    char * publickeyaschar, 
     unsigned int privatekey)
 {
     int ioSock;
@@ -206,16 +205,18 @@ int parent(
         fprintf(stderr, "Couldn't receive client's key\n");
         return -1;
     }
-    if (sendxbytes(ioSock, keyaschar, 128) < 0) {
+    if (sendxbytes(ioSock, publickeyaschar, 128) < 0) {
         fprintf(stderr, "Couldn't send own key to client\n");
         return -1;
     }
+    //need to encode
     if (receivexbytes(ioSock, namebuf, 128) < 0) {
         fprintf(stderr, "Couldn't receive name\n");
         return -1;
     }
     unsigned int clientkey = (unsigned int) strtoul(keybuf, NULL, 0);
     unsigned int secretkey = calcSharedSecret(clientkey, privatekey);
+    //in case of last client key still being in keybuffer.
     memset(keybuf, 0, 128);
     sprintf(keybuf, "%d", secretkey);
 
@@ -265,6 +266,7 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
                 pollfds[i].fd = -1;
                 clients[i].fd = -1;
             }
+            decryptmessage(bufferpointer, BUFFERSIZE - namelen, clients[i].secretkey);
 
             //decode func here
             for (int j = 1; j < nfds; j++)
@@ -273,6 +275,7 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
                     continue;
                 if (j != i)
                 {
+                    encryptmessage(buffer, BUFFERSIZE, clients[j].secretkey);
                     if (sendxbytes(pollfds[j].fd, buffer, BUFFERSIZE) < 0)
                     {
                         //if this function returns less than 0, there was an error or client disconnect.
@@ -280,8 +283,10 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
                         close(pollfds[j].fd);
                         printf("Closed fd %d on send, with errno: %d\n", pollfds[j].fd, errno);
                         pollfds[j].fd = -1;
-                        clients[i].fd = -1;
+                        clients[j].fd = -1;
                     }
+                    //need to decrypt so that unique encryption for other clients will work
+                    decryptmessage(buffer, BUFFERSIZE, clients[j].secretkey);
                 }
             }
         }
