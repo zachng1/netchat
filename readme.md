@@ -1,6 +1,8 @@
 # Network chat
 Just a basic network chat program built while learning about sockets in C.
 
+**Mostly surpassed by https://github.com/zachng1/chatroom which implements a basic GUI. However does not have the encryption available in this version yet.**
+
 ## Compatibility
 Uses Linux sockets for IPC, so probably won't work on Windows. (Considering changing from processes to threading though)
 
