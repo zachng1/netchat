@@ -25,19 +25,19 @@ int main(int argc, char * argv[]) {
         return -1;
     }
 
-    int port, sock, len, namelen;
+    int port, sock, len, namelen, namebuflen = 128, keylen = 128, serverkeylen = 128;
     struct sockaddr_in serverAddr;
     char buffer[BUFFERSIZE];
-    char name[128], keybuf[128], serverkeybuf[128];
-    strcpy(name, argv[3]);
+    char name[namebuflen], keybuf[keylen], serverkeybuf[serverkeylen];
+    strncpy(name, argv[3], namelen);
 
     //calculate D-H keys
     srand(time(NULL));
     //mod P because it kept overflowing unsigned int
-    //not the most secure encryption anyway, this is more of an demonstrative exercise
+    //not the most secure encryption anyway, this is more of a demonstrative exercise
     unsigned int privatekey = (unsigned int) rand() % P;
     unsigned int publickey = calcPublicKey(privatekey);
-    sprintf(keybuf, "%d", publickey); 
+    snprintf(keybuf, keylen, "%d", publickey); 
     
 
 
@@ -71,9 +71,9 @@ int main(int argc, char * argv[]) {
     }
     printf("Connected! Send EXIT to close.\n");
 
-    sendxbytes(sock, keybuf, 128);
-    receivexbytes(sock, serverkeybuf, 128);
-    sendxbytes(sock, name, 128);
+    sendxbytes(sock, keybuf, keylen);
+    receivexbytes(sock, serverkeybuf, serverkeylen);
+    sendxbytes(sock, name, namebuflen);
     unsigned int serverkey = (unsigned int) strtoul(serverkeybuf, NULL, 0);
     unsigned int secretkey = calcSharedSecret(serverkey, privatekey);
 
@@ -85,6 +85,7 @@ int main(int argc, char * argv[]) {
     pollfds[1].events = POLLIN;
 
     //ensures we send same bytes as server has space to receive
+    //i.e. will be length of name + ": ".
     namelen = strlen(name) + 2;
 
     while (true) {

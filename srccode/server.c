@@ -188,12 +188,12 @@ int parent(
     char * publickeyaschar, 
     unsigned int privatekey)
 {
-    int ioSock;
+    int ioSock, keylen = 128, namebuflen = 128;
     struct iovec * iov = malloc(sizeof(struct iovec) * 2);
     struct msghdr * metadata = malloc(sizeof(struct msghdr));
-    char namebuf[128];
+    char namebuf[namebuflen];
     //very basic implementation of dh exchange atm
-    char keybuf[128];
+    char keybuf[keylen];
 
     errno = 0;
     if ((ioSock = accept(lsnSock, (struct sockaddr *)clientAddr, (socklen_t *)&clientLen)) < 0)
@@ -218,16 +218,16 @@ int parent(
     unsigned int secretkey = calcSharedSecret(clientkey, privatekey);
     //in case of last client key still being in keybuffer.
     memset(keybuf, 0, 128);
-    sprintf(keybuf, "%d", secretkey);
+    snprintf(keybuf, keylen, "%d", secretkey);
 
 
 
     metadata->msg_iov = iov;
     metadata->msg_iovlen = 2; //public key, client name
     iov[0].iov_base = namebuf;
-    iov[0].iov_len = 128;
+    iov[0].iov_len = namebuflen;
     iov[1].iov_base = keybuf;
-    iov[1].iov_len = 128;
+    iov[1].iov_len = keylen;
     
 
     errno = 0;
@@ -255,7 +255,7 @@ int serverbroadcast(struct pollfd *pollfds, struct clientinfo *clients, int nfds
             //if signal recieved, read bytes from that fd into buffer, then subsequently broadcast to all other clients
             errno = 0;
             
-            namelen = sprintf(buffer, "%s: ", clients[i].name);
+            namelen = snprintf(buffer, BUFFERSIZE, "%s: ", clients[i].name);
             bufferpointer += namelen;
             if ((total = receivexbytes(pollfds[i].fd, bufferpointer, BUFFERSIZE - namelen)) < 0)
             {

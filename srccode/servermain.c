@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
     unsigned int privatekey = (unsigned int) rand() % P;
     unsigned int publickey = calcPublicKey(privatekey);
     char keyaschar[128];
-    sprintf(keyaschar, "%d", publickey);
+    snprintf(keyaschar, 128, "%d", publickey);
 
     
 
@@ -108,8 +108,6 @@ int main(int argc, char *argv[])
         close(pipefd[0]);
 
         //initialise as 1 because pollfds[0] will be pipe
-        //so technically nfds will always be one more than actual nfds
-        //-- this is okay because we use it to insert the next one
         int nfds = 1;
         int pollfd_struct_size = 8;
         int recvfd;
@@ -162,7 +160,7 @@ int main(int argc, char *argv[])
                         else
                             newnfds++;
                     }
-                    //this whole thing needs a lot of cleaning but that's a job for another day lol
+                    //this whole thing needs separating into (a) function(s)
                     //it just handles all the different resize conditions and resizes pollfd and clientinfo arrays
                     if (disconnects && (newnfds < nfds / 4))
                     {

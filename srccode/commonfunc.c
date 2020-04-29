@@ -41,6 +41,7 @@ int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, siz
     // receive before sending -- maybe better? Or order arbitrary?
     if (fds[1].revents & POLLIN) {
         if (receivexbytes(socketid, buffer, bufferlen) < 0) {
+            memset(buffer, 0, bufferlen);
             return -1;
         }
         decryptmessage(buffer, bufferlen, key);
@@ -49,10 +50,17 @@ int send_and_receive(struct pollfd * fds, int socketid, char * const buffer, siz
     }
 
     if (fds[0].revents & POLLIN) {
-
-        fgets(buffer, bufferlen, stdin);
+        size_t buflencopy = bufferlen;
+        getline(buffer, &buflencopy, stdin);
+        //getline will adjust the length of buffer accordingly, if size is too long
+        //we don't want to deal with messages >1024 bytes.
+        if (buflencopy != bufferlen) {
+            memset(buffer, 0, bufferlen);
+            return -1;
+        }
         encryptmessage(buffer, bufferlen - namelen, key);
         if (sendxbytes(socketid, buffer, bufferlen - namelen) < 0) {
+            memset(buffer, 0, bufferlen);
             return -1;
         }
         memset(buffer, 0, bufferlen); //clean up buffer for next send / receipt
